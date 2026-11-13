@@ -1,0 +1,4 @@
+{
+  "serverUrl": "https://voice.example.com",
+  "wsPath": "/ws"
+}

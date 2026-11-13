@@ -1,0 +1,75 @@
+{
+  "name": "@moscowroleplay/voice-client",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Windows-клиент MoscowRoleplay Voice на Electron: Discord-вход, proximity voice и радио через mediasoup",
+  "author": "MoscowRoleplay",
+  "main": "electron/main.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "icon": "node scripts/generate-icon.js",
+    "build:renderer": "esbuild renderer/src/main.js --bundle --format=iife --platform=browser --target=chrome120 --outfile=renderer/dist/app.js --log-level=warning",
+    "build": "npm run icon && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --win --dir",
+    "dist": "npm run build && electron-builder --win nsis",
+    "shared:check": "node scripts/check-shared.js",
+    "check": "npm run shared:check && node scripts/check-syntax.js"
+  },
+  "dependencies": {
+    "mediasoup-client": "3.26.0",
+    "ws": "8.22.2"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "^26.0.0",
+    "esbuild": "^0.25.0"
+  },
+  "build": {
+    "appId": "com.moscowroleplay.voice",
+    "productName": "MoscowRoleplay Voice",
+    "copyright": "MoscowRoleplay",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/index.html",
+      "renderer/styles.css",
+      "renderer/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "client-config.example.json",
+        "to": "client-config.example.json"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "MoscowRoleplay-Voice-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MoscowRoleplay Voice",
+      "deleteAppDataOnUninstall": false
+    }
+  },
+  "license": "UNLICENSED"
+}
