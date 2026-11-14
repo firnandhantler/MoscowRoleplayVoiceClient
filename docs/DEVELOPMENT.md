@@ -94,7 +94,7 @@ npm run dev
 
 ```json
 {
-  "serverUrl": "http://201.8.80.121",
+  "serverUrl": "https://201-8-80-121.sslip.io",
   "wsPath": "/ws"
 }
 ```
