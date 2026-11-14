@@ -89,6 +89,7 @@ export class AppUi {
     this.settings = null;
     this.capturing = null;
     this.busy = false;
+    this.authEnabled = null;
 
     this.elements = {
       viewLogin: requireElement(document.getElementById('view-login'), '#view-login'),
@@ -184,7 +185,7 @@ export class AppUi {
    */
   setBusy(busy) {
     this.busy = busy;
-    this.elements.loginButton.disabled = busy;
+    this.elements.loginButton.disabled = busy || this.authEnabled === false;
     this.elements.loginButton.textContent = busy ? 'Ожидание входа…' : 'Войти через Discord';
   }
 
@@ -192,12 +193,19 @@ export class AppUi {
    * @param {{authenticated: boolean, user?: object|null, error?: object|null, authEnabled?: boolean|null}} status
    */
   setAuthStatus(status) {
+    if (status.authEnabled === true || status.authEnabled === false) {
+      this.authEnabled = status.authEnabled;
+    }
+
     if (!status.authenticated) {
       this.elements.userName.textContent = '—';
       this.elements.userRoblox.textContent = 'Roblox не привязан';
 
       if (status.authEnabled === false) {
         this.setLoginError('На сервере не настроена авторизация через Discord.');
+        this.elements.loginButton.disabled = true;
+      } else if (!this.busy) {
+        this.elements.loginButton.disabled = false;
       }
 
       return;

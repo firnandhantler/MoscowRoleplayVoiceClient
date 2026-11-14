@@ -140,6 +140,7 @@ class AuthManager {
       const token = await this.#readSessionCookie();
 
       if (token === null) {
+        await this.#refreshAuthEnabled();
         this.#clear();
         return this.getStatus();
       }
@@ -157,6 +158,32 @@ class AuthManager {
   }
 
   /**
+   * Узнаёт у сервера, включена ли авторизация, даже если cookie ещё нет.
+   * Это позволяет показать понятную причину вместо окна с ошибкой 404.
+   *
+   * @returns {Promise<void>}
+   */
+  async #refreshAuthEnabled() {
+    const response = await requestJson(`${this.config.serverUrl}/auth/session`, {
+      timeoutMs: 10_000,
+    });
+
+    if (response.status !== 200 || typeof response.data !== 'object' || response.data === null) {
+      const error = readServerError(response, 'Сервер не подтвердил сессию.');
+      throw new AuthError(error.message, error.code);
+    }
+
+    this.authEnabled = response.data.authEnabled === true;
+    this.lastError =
+      this.authEnabled === false
+        ? {
+            code: 'auth_disabled',
+            message: 'На сервере не настроена авторизация через Discord.',
+          }
+        : null;
+  }
+
+  /**
    * Открывает окно входа и дожидается сессии.
    *
    * @param {BrowserWindow|null} parentWindow
@@ -165,6 +192,17 @@ class AuthManager {
   async login(parentWindow = null) {
     if (this.loginWindow !== null) {
       throw new AuthError('Окно входа уже открыто.', 'login_in_progress');
+    }
+
+    // Проверяем сервер и наличие авторизации до открытия окна: иначе при
+    // недоступном localhost или отключённом OAuth2 пользователь увидит
+    // ERR_CONNECTION_REFUSED либо страницу с JSON вместо понятной ошибки.
+    if (this.authEnabled !== true) {
+      await this.#refreshAuthEnabled();
+    }
+
+    if (this.authEnabled === false) {
+      throw new AuthError('На сервере не настроена авторизация через Discord.', 'auth_disabled');
     }
 
     const serverOrigin = new URL(this.config.serverUrl).origin;
