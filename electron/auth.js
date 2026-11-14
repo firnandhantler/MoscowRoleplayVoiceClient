@@ -142,10 +142,9 @@ class AuthManager {
       if (token === null) {
         await this.#refreshAuthEnabled();
         this.#clear();
-        return this.getStatus();
+      } else {
+        await this.#applyToken(token);
       }
-
-      await this.#applyToken(token);
     } catch (err) {
       this.lastError = {
         code: err?.code ?? 'auth_restore_failed',
@@ -153,6 +152,10 @@ class AuthManager {
       };
       this.#clear();
     }
+
+    // Сообщаем renderer'у итоговый статус: окно могло загрузиться раньше,
+    // чем завершилась проверка /auth/session.
+    this.#emit();
 
     return this.getStatus();
   }

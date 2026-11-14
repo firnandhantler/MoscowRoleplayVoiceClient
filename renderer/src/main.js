@@ -522,6 +522,11 @@ function createUi() {
         } catch (err) {
           const message = errorMessage(err, 'Не удалось выполнить вход.');
           ui.setLoginError(message);
+
+          // Ошибка могла быть получена до завершения restore(): обновляем
+          // статус, чтобы заблокировать кнопку при отключённой авторизации.
+          const status = await bridge.auth.status();
+          ui.setAuthStatus(status);
         } finally {
           ui.setBusy(false);
         }
