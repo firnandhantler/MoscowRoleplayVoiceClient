@@ -80,7 +80,7 @@ npm run dev
 
 ## 4. Подключение к серверу
 
-По умолчанию используется `http://localhost:3000`.
+В репозитории используется `app/client-config.json` с адресом развёрнутого сервера. Этот файл включается в установщик через `extraResources` и попадает в папку ресурсов приложения.
 
 Порядок поиска адреса:
 
@@ -90,14 +90,16 @@ npm run dev
 4. `client-config.json` рядом с приложением в режиме разработки;
 5. `http://localhost:3000`.
 
-Пример `app/client-config.json`:
+Текущий `app/client-config.json`:
 
 ```json
 {
-  "serverUrl": "https://voice.example.com",
+  "serverUrl": "http://201.8.80.121",
   "wsPath": "/ws"
 }
 ```
+
+`client-config.example.json` оставлен как шаблон для другого окружения.
 
 В файле нет секретов: только адрес сервера. Токен сессии хранится в изолированной сессии Electron и недоступен renderer.
 
@@ -150,7 +152,7 @@ npm run dist
 Результат:
 
 ```text
-app\release\MoscowRoleplay-Voice-Setup-0.5.0.exe
+app\release\MoscowRoleplay-Voice-Setup-0.5.1.exe
 ```
 
 Другие команды:

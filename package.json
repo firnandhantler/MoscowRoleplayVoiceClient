@@ -1,6 +1,6 @@
 {
   "name": "@moscowroleplay/voice-client",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "Windows-клиент MoscowRoleplay Voice на Electron: Discord-вход, proximity voice и радио через mediasoup",
   "author": "MoscowRoleplay",
@@ -44,6 +44,10 @@
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "client-config.json",
+        "to": "client-config.json"
+      },
       {
         "from": "client-config.example.json",
         "to": "client-config.example.json"
