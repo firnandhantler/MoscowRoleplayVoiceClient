@@ -247,7 +247,7 @@ export class AppUi {
     if (state.linked === false) {
       badgeText = 'Roblox не привязан';
       badgeTone = 'danger';
-      text = 'Привяжите Roblox через Bloxlink и войдите заново, чтобы включить голос по близости.';
+      text = 'Привяжите Roblox через ER:LC Россия и войдите заново, чтобы включить голос по близости.';
     } else if (state.inGame === false) {
       badgeText = 'Не в игре';
       badgeTone = 'muted';

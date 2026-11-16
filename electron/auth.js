@@ -5,7 +5,7 @@
  *
  * Схема:
  * 1. В отдельном окне открывается `/auth/discord/start` на сервере.
- * 2. Пользователь входит в Discord; сервер проверяет код, Bloxlink и Roblox,
+ * 2. Пользователь входит в Discord; сервер проверяет код, ER:LC Россия и Roblox,
  *    после чего выставляет HttpOnly-cookie сессии `mrv_session`.
  * 3. Главный процесс читает cookie из изолированной сессии Electron
  *    (renderer её прочитать не может) и запрашивает `/auth/session`.
@@ -460,7 +460,7 @@ class AuthManager {
   }
 
   /**
-   * Повторно проверяет привязку Roblox через Bloxlink.
+   * Повторно проверяет привязку Roblox через ER:LC Россия.
    *
    * @returns {Promise<object>}
    */

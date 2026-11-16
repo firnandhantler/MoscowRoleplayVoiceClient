@@ -573,7 +573,7 @@ function createUi() {
           if (result.linkStatus === 'linked') {
             ui.toast('Привязка Roblox подтверждена.', 'success');
           } else if (result.linkStatus === 'not_linked') {
-            ui.toast('Привязка Roblox не найдена. Привяжите аккаунт через Bloxlink.', 'error');
+            ui.toast('Привязка Roblox не найдена. Привяжите аккаунт через ER:LC Россия.', 'error');
           } else {
             ui.toast('Привязка проверена, но статус требует внимания.', 'info');
           }
