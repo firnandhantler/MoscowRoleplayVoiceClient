@@ -179,7 +179,7 @@ npm run dist
 Результат:
 
 ```text
-app\release\MoscowRoleplay-Voice-Setup-0.6.0.exe
+app\release\MoscowRoleplay-Voice-Setup-0.6.1.exe
 ```
 
 Другие команды:
