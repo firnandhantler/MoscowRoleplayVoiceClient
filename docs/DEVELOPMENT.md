@@ -2,7 +2,8 @@
 
 Документ описывает устройство и сборку Electron-приложения MoscowRoleplay Voice. Клиент находится в папке `app/` и устанавливается независимо от сервера.
 
-Серверная документация: [../../server/docs/DEVELOPMENT.md](../../server/docs/DEVELOPMENT.md).
+Серверная документация: [../../server/docs/DEVELOPMENT.md](../../server/docs/DEVELOPMENT.md)
+(в репозитории клиента её нет — папка `server/` не публикуется).
 
 ## 1. Требования
 

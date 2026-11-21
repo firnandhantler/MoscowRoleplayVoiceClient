@@ -1,0 +1,12 @@
+# Зависимости и сборки клиента
+node_modules/
+
+# Установщик и промежуточные файлы electron-builder
+release/
+
+# Сборка renderer через esbuild
+renderer/dist/
+
+# Локальные логи и временные файлы
+*.log
+tmp/
