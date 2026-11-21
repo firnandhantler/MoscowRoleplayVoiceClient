@@ -1,20 +1,23 @@
 'use strict';
 
 /**
- * Авторизация клиента через Discord OAuth2.
+ * Авторизация клиента через Discord OAuth2 в системном браузере.
  *
  * Схема:
- * 1. В отдельном окне открывается `/auth/discord/start` на сервере.
- * 2. Пользователь входит в Discord; сервер проверяет код, ER:LC Россия и Roblox,
- *    после чего выставляет HttpOnly-cookie сессии `mrv_session`.
- * 3. Главный процесс читает cookie из изолированной сессии Electron
- *    (renderer её прочитать не может) и запрашивает `/auth/session`.
- * 4. Токен остаётся в главном процессе и передаётся только WebSocket-клиенту.
+ * 1. Главный процесс поднимает временный HTTP-сервер на 127.0.0.1 (loopback).
+ * 2. В системном браузере открывается `/auth/discord/start` с адресом возврата
+ *    и challenge — SHA-256 от случайного verifier'а.
+ * 3. Пользователь входит в Discord; сервер проверяет код, ER:LC Россия и Roblox,
+ *    затем перенаправляет браузер на loopback-адрес с одноразовым кодом.
+ * 4. Клиент обменивает код и verifier на токен сессии и сохраняет его только
+ *    в главном процессе (и в изолированной cookie-сессии для восстановления).
  *
- * Renderer не получает ни токен, ни cookie.
+ * Renderer не получает ни токен, ни cookie, ни verifier.
  */
 
-const { BrowserWindow, session } = require('electron');
+const { createHash, randomBytes } = require('node:crypto');
+const http = require('node:http');
+const { session, shell } = require('electron');
 const { requestJson, readServerError } = require('./http');
 
 const SESSION_COOKIE_NAME = 'mrv_session';
@@ -23,45 +26,25 @@ const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 const COOKIE_LOOKUP_ATTEMPTS = 6;
 const COOKIE_LOOKUP_DELAY_MS = 200;
 
+/** Путь возврата. Совпадает с проверкой на сервере. */
+const CALLBACK_PATH = '/mrv-auth/callback';
+
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
 /**
- * Проверяет, разрешена ли навигация в окне входа.
- * Разрешены только страницы сервера и домены Discord.
- *
- * @param {string} urlString
- * @param {string} serverOrigin
- * @returns {boolean}
+ * Сообщения об ошибках, которые сервер передаёт в адресе возврата.
+ * Неизвестный код не раскрывается пользователю.
  */
-function isAllowedAuthUrl(urlString, serverOrigin) {
-  if (urlString === 'about:blank') {
-    return true;
-  }
-
-  let url;
-
-  try {
-    url = new URL(urlString);
-  } catch {
-    return false;
-  }
-
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    return false;
-  }
-
-  if (url.origin === new URL(serverOrigin).origin) {
-    return true;
-  }
-
-  const host = url.hostname.toLowerCase();
-
-  return (
-    url.protocol === 'https:' &&
-    (host === 'discord.com' ||
-      host.endsWith('.discord.com') ||
-      host.endsWith('.discordapp.com') ||
-      host.endsWith('.discordapp.net'))
-  );
-}
+const HANDOFF_ERROR_MESSAGES = {
+  oauth_access_denied: 'Вход через Discord был отменён. Попробуйте снова.',
+  oauth_error: 'Discord вернул ошибку входа. Попробуйте снова.',
+  oauth_state_mismatch: 'Проверка безопасности входа не пройдена. Начните вход заново.',
+  oauth_state_expired: 'Срок действия попытки входа истёк. Начните вход заново.',
+  oauth_missing_code: 'Discord не передал код авторизации. Начните вход заново.',
+  invalid_handoff: 'Клиент передал некорректные параметры входа. Обновите приложение.',
+  handoff_disabled: 'Сервер не поддерживает вход через системный браузер. Обновите сервер.',
+  auth_disabled: 'На сервере не настроена авторизация через Discord.',
+};
 
 /**
  * Ждёт заданное время.
@@ -90,6 +73,55 @@ class AuthError extends Error {
   }
 }
 
+/**
+ * Страница, которую видит пользователь в браузере после возврата в клиент.
+ * Без внешних ресурсов и пользовательских данных.
+ *
+ * @param {boolean} ok
+ * @returns {string}
+ */
+function resultPage(ok) {
+  const title = ok ? 'Вход выполнен' : 'Вход не завершён';
+
+  return [
+    '<!doctype html>',
+    '<html lang="ru">',
+    '<head><meta charset="utf-8"><title>',
+    title,
+    '</title></head>',
+    '<body style="font-family:Segoe UI,Arial,sans-serif;background:#0b1118;color:#e6edf5;padding:48px">',
+    '<h1>',
+    title,
+    '</h1>',
+    '<p>',
+    ok
+      ? 'Вернитесь в приложение MoscowRoleplay Voice — оно уже завершает вход.'
+      : 'Вернитесь в приложение MoscowRoleplay Voice и попробуйте войти снова.',
+    '</p>',
+    '</body>',
+    '</html>',
+  ].join('');
+}
+
+/**
+ * Отвечает в браузер простой страницей.
+ *
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} statusCode
+ * @param {boolean} ok
+ */
+function sendBrowserPage(res, statusCode, ok) {
+  const body = Buffer.from(resultPage(ok), 'utf8');
+
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Length', body.byteLength);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.end(body);
+}
+
 class AuthManager {
   /**
    * @param {{config: {serverUrl: string}, onChanged?: ((status: object) => void)|null}} options
@@ -103,14 +135,10 @@ class AuthManager {
     this.expiresAt = null;
     this.authEnabled = null;
     this.lastError = null;
-    this.loginWindow = null;
-
-    // Окно входа не нуждается ни в каких разрешениях браузера.
-    this.authSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-      callback(false);
-    });
-
-    this.authSession.setPermissionCheckHandler(() => false);
+    /** Пометка о выполняющемся входе, чтобы не открыть два браузера. */
+    this.loginInProgress = false;
+    /** @type {import('node:http').Server|null} */
+    this.callbackServer = null;
   }
 
   /** @returns {object} */
@@ -162,7 +190,6 @@ class AuthManager {
 
   /**
    * Узнаёт у сервера, включена ли авторизация, даже если cookie ещё нет.
-   * Это позволяет показать понятную причину вместо окна с ошибкой 404.
    *
    * @returns {Promise<void>}
    */
@@ -187,19 +214,21 @@ class AuthManager {
   }
 
   /**
-   * Открывает окно входа и дожидается сессии.
+   * Открывает вход в системном браузере и дожидается возврата сессии.
    *
-   * @param {BrowserWindow|null} parentWindow
+   * @param {Electron.BrowserWindow|null} parentWindow Не используется: вход идёт
+   *   во внешнем браузере. Параметр сохранён для совместимости IPC-вызова.
    * @returns {Promise<object>} Статус авторизации.
    */
   async login(parentWindow = null) {
-    if (this.loginWindow !== null) {
-      throw new AuthError('Окно входа уже открыто.', 'login_in_progress');
+    void parentWindow;
+
+    if (this.loginInProgress) {
+      throw new AuthError('Вход уже выполняется в браузере.', 'login_in_progress');
     }
 
-    // Проверяем сервер и наличие авторизации до открытия окна: иначе при
-    // недоступном localhost или отключённом OAuth2 пользователь увидит
-    // ERR_CONNECTION_REFUSED либо страницу с JSON вместо понятной ошибки.
+    // Проверяем сервер до открытия браузера: иначе пользователь увидит
+    // ERR_CONNECTION_REFUSED или страницу с JSON вместо понятной ошибки.
     if (this.authEnabled !== true) {
       await this.#refreshAuthEnabled();
     }
@@ -208,44 +237,24 @@ class AuthManager {
       throw new AuthError('На сервере не настроена авторизация через Discord.', 'auth_disabled');
     }
 
-    const serverOrigin = new URL(this.config.serverUrl).origin;
-
-    const window = new BrowserWindow({
-      width: 520,
-      height: 720,
-      minWidth: 420,
-      minHeight: 560,
-      parent: parentWindow ?? undefined,
-      modal: parentWindow !== null,
-      show: true,
-      title: 'Вход через Discord',
-      backgroundColor: '#0b1118',
-      autoHideMenuBar: true,
-      webPreferences: {
-        partition: AUTH_PARTITION,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        devTools: false,
-        webSecurity: true,
-        webviewTag: false,
-      },
-    });
-
-    this.loginWindow = window;
-    window.removeMenu();
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    window.webContents.on('will-navigate', (event, url) => {
-      if (!isAllowedAuthUrl(url, serverOrigin)) {
-        event.preventDefault();
-      }
-    });
+    this.loginInProgress = true;
 
     try {
-      const token = await this.#waitForCallback(window, serverOrigin);
+      const verifier = randomBytes(32).toString('base64url');
+      const challenge = createHash('sha256').update(verifier, 'utf8').digest('hex');
 
-      await window.close();
+      const { redirectUri, callback } = await this.#startCallbackServer();
+
+      const startUrl = new URL(`${this.config.serverUrl}/auth/discord/start`);
+      startUrl.searchParams.set('redirect_uri', redirectUri);
+      startUrl.searchParams.set('challenge', challenge);
+
+      const result = await this.#waitForLogin(callback, startUrl.toString());
+
+      const token = await this.#exchangeCode(result.code, verifier);
+
       await this.#applyToken(token);
+      await this.#storeSessionCookie(token);
       this.lastError = null;
       this.#emit();
 
@@ -258,24 +267,31 @@ class AuthManager {
       this.#emit();
       throw err;
     } finally {
-      this.loginWindow = null;
-
-      if (!window.isDestroyed()) {
-        window.destroy();
-      }
+      this.loginInProgress = false;
+      await this.#stopCallbackServer();
     }
   }
 
   /**
-   * Открывает страницу входа и ждёт, пока сервер выставит cookie сессии.
+   * Поднимает временный loopback-сервер, который принимает код возврата.
    *
-   * @param {BrowserWindow} window
-   * @param {string} serverOrigin
-   * @returns {Promise<string>} Токен сессии.
+   * @returns {Promise<{
+   *   redirectUri: string,
+   *   callback: {promise: Promise<{code: string}>, cancel: () => void},
+   * }>}
    */
-  #waitForCallback(window, serverOrigin) {
+  #startCallbackServer() {
     return new Promise((resolve, reject) => {
+      /** @type {(value: {code: string}) => void} */
+      let resolveResult;
+      /** @type {(reason: Error) => void} */
+      let rejectResult;
       let settled = false;
+
+      const promise = new Promise((resolvePromise, rejectPromise) => {
+        resolveResult = resolvePromise;
+        rejectResult = rejectPromise;
+      });
 
       const finish = (fn, value) => {
         if (settled) {
@@ -283,86 +299,193 @@ class AuthManager {
         }
 
         settled = true;
-        clearTimeout(timer);
-        window.webContents.off('did-finish-load', onLoad);
-        window.off('closed', onClosed);
         fn(value);
       };
 
-      const timer = setTimeout(() => {
-        finish(reject, new AuthError('Время ожидания входа истекло. Попробуйте снова.', 'login_timeout'));
-      }, LOGIN_TIMEOUT_MS);
+      const server = http.createServer((req, res) => {
+        // Защита от DNS-rebinding: только собственный адрес и порт.
+        const address = server.address();
+        const expectedHost =
+          address !== null && typeof address === 'object'
+            ? `127.0.0.1:${address.port}`
+            : null;
 
-      timer.unref?.();
+        if (expectedHost === null || req.headers.host !== expectedHost) {
+          res.statusCode = 421;
+          res.end();
+          return;
+        }
 
-      const onClosed = () => {
-        finish(reject, new AuthError('Окно входа закрыто. Попробуйте снова.', 'login_cancelled'));
-      };
-
-      const onLoad = async () => {
-        const currentUrl = window.webContents.getURL();
-        let parsed;
+        let url;
 
         try {
-          parsed = new URL(currentUrl);
+          url = new URL(req.url ?? '/', 'http://127.0.0.1');
         } catch {
+          res.statusCode = 400;
+          res.end();
           return;
         }
 
-        if (parsed.origin !== serverOrigin || parsed.pathname !== '/auth/discord/callback') {
+        if (req.method !== 'GET' || url.pathname !== CALLBACK_PATH) {
+          res.statusCode = 404;
+          res.end();
           return;
         }
 
-        const token = await this.#readSessionCookie();
+        const code = url.searchParams.get('code');
+        const error = url.searchParams.get('error');
 
-        if (token !== null) {
-          finish(resolve, token);
+        if (typeof error === 'string' && error !== '') {
+          sendBrowserPage(res, 400, false);
+          finish(
+            rejectResult,
+            new AuthError(
+              HANDOFF_ERROR_MESSAGES[error] ?? 'Вход через Discord не был завершён.',
+              error,
+            ),
+          );
           return;
         }
 
-        // Cookie не появилась: сервер вернул ошибку входа текстом JSON.
-        const message = await this.#readPageError(window);
-        finish(reject, new AuthError(message ?? 'Сервер не подтвердил вход. Попробуйте снова.', 'login_rejected'));
-      };
+        if (typeof code !== 'string' || !TOKEN_PATTERN.test(code)) {
+          sendBrowserPage(res, 400, false);
+          finish(
+            rejectResult,
+            new AuthError('Сервер вернул некорректный код входа.', 'login_invalid_code'),
+          );
+          return;
+        }
 
-      window.on('closed', onClosed);
-      window.webContents.on('did-finish-load', () => {
-        void onLoad();
+        sendBrowserPage(res, 200, true);
+        finish(resolveResult, { code });
       });
 
-      void window.loadURL(`${this.config.serverUrl}/auth/discord/start`).catch((err) => {
-        finish(reject, new AuthError(`Не удалось открыть страницу входа: ${err.message}`, 'login_open_failed'));
+      server.once('error', (err) => {
+        reject(
+          new AuthError(
+            `Не удалось поднять локальный адрес для входа: ${err.message}`,
+            'login_loopback_failed',
+          ),
+        );
+      });
+
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+
+        if (address === null || typeof address !== 'object') {
+          server.close();
+          reject(new AuthError('Не удалось определить локальный адрес для входа.', 'login_loopback_failed'));
+          return;
+        }
+
+        this.callbackServer = server;
+
+        resolve({
+          redirectUri: `http://127.0.0.1:${address.port}${CALLBACK_PATH}`,
+          callback: {
+            promise,
+            cancel: () => {
+              finish(rejectResult, new AuthError('Вход отменён.', 'login_cancelled'));
+            },
+          },
+        });
       });
     });
   }
 
   /**
-   * Пытается прочитать сообщение об ошибке со страницы ответа сервера.
+   * Закрывает временный loopback-сервер.
    *
-   * @param {BrowserWindow} window
-   * @returns {Promise<string|null>}
+   * @returns {Promise<void>}
    */
-  async #readPageError(window) {
-    try {
-      const text = await window.webContents.executeJavaScript(
-        'document.body ? document.body.innerText : ""',
-        true,
-      );
+  #stopCallbackServer() {
+    const server = this.callbackServer;
 
-      if (typeof text !== 'string' || text.length === 0 || text.length > 4096) {
-        return null;
-      }
+    this.callbackServer = null;
 
-      const parsed = JSON.parse(text);
-
-      if (parsed && typeof parsed.error?.message === 'string') {
-        return parsed.error.message;
-      }
-    } catch {
-      // Страница могла быть уже закрыта — используем общее сообщение.
+    if (server === null) {
+      return Promise.resolve();
     }
 
-    return null;
+    return new Promise((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+
+      server.closeAllConnections?.();
+    });
+  }
+
+  /**
+   * Открывает браузер и ждёт код возврата.
+   *
+   * @param {{promise: Promise<{code: string}>, cancel: () => void}} callback
+   * @param {string} startUrl
+   * @returns {Promise<{code: string}>}
+   */
+  async #waitForLogin(callback, startUrl) {
+    /** @type {NodeJS.Timeout|undefined} */
+    let timer;
+
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new AuthError('Время ожидания входа истекло. Попробуйте снова.', 'login_timeout'),
+        );
+      }, LOGIN_TIMEOUT_MS);
+
+      timer.unref?.();
+    });
+
+    try {
+      await shell.openExternal(startUrl, { activate: true });
+
+      return await Promise.race([callback.promise, timeout]);
+    } catch (err) {
+      callback.cancel();
+      throw err;
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  /**
+   * Обменивает одноразовый код и verifier на токен сессии.
+   *
+   * @param {string} code
+   * @param {string} verifier
+   * @returns {Promise<string>}
+   */
+  async #exchangeCode(code, verifier) {
+    const url = new URL(`${this.config.serverUrl}/auth/handoff/exchange`);
+    url.searchParams.set('code', code);
+    url.searchParams.set('verifier', verifier);
+
+    let response;
+
+    try {
+      response = await requestJson(url.toString(), { method: 'POST', timeoutMs: 15_000 });
+    } catch (err) {
+      throw new AuthError(
+        err instanceof Error ? err.message : 'Не удалось завершить вход на сервере.',
+        'handoff_exchange_failed',
+      );
+    }
+
+    if (response.status !== 200 || typeof response.data !== 'object' || response.data === null) {
+      const error = readServerError(response, 'Не удалось завершить вход на сервере.');
+      throw new AuthError(error.message, error.code);
+    }
+
+    const token = response.data.token;
+
+    if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) {
+      throw new AuthError('Сервер не выдал токен сессии. Попробуйте снова.', 'handoff_invalid_token');
+    }
+
+    return token;
   }
 
   /**
@@ -380,7 +503,7 @@ class AuthManager {
 
       const value = cookies[0]?.value;
 
-      if (typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)) {
+      if (typeof value === 'string' && TOKEN_PATTERN.test(value)) {
         return value;
       }
 
@@ -393,6 +516,29 @@ class AuthManager {
   }
 
   /**
+   * Сохраняет токен в изолированную cookie-сессию, чтобы вход пережил перезапуск.
+   *
+   * @param {string} token
+   * @returns {Promise<void>}
+   */
+  async #storeSessionCookie(token) {
+    try {
+      await this.authSession.cookies.set({
+        url: this.config.serverUrl,
+        name: SESSION_COOKIE_NAME,
+        value: token,
+        path: '/',
+        httpOnly: true,
+        secure: this.config.serverUrl.startsWith('https:'),
+        sameSite: 'lax',
+      });
+    } catch {
+      // Cookie нужна только для восстановления после перезапуска:
+      // текущая сессия уже работает через заголовок Authorization.
+    }
+  }
+
+  /**
    * Проверяет токен на сервере и сохраняет данные пользователя.
    *
    * @param {string} token
@@ -400,7 +546,7 @@ class AuthManager {
    */
   async #applyToken(token) {
     const response = await requestJson(`${this.config.serverUrl}/auth/session`, {
-      headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
+      headers: { Authorization: `Bearer ${token}` },
       timeoutMs: 10_000,
     });
 
@@ -440,7 +586,7 @@ class AuthManager {
       try {
         await requestJson(`${this.config.serverUrl}/auth/logout`, {
           method: 'POST',
-          headers: { Cookie: `${SESSION_COOKIE_NAME}=${token}` },
+          headers: { Authorization: `Bearer ${token}` },
           timeoutMs: 10_000,
         });
       } catch {
@@ -471,7 +617,7 @@ class AuthManager {
 
     const response = await requestJson(`${this.config.serverUrl}/auth/roblox/relink`, {
       method: 'POST',
-      headers: { Cookie: `${SESSION_COOKIE_NAME}=${this.token}` },
+      headers: { Authorization: `Bearer ${this.token}` },
       timeoutMs: 15_000,
     });
 
@@ -504,4 +650,4 @@ class AuthManager {
   }
 }
 
-module.exports = { AuthManager, AuthError, AUTH_PARTITION, SESSION_COOKIE_NAME, isAllowedAuthUrl };
+module.exports = { AuthManager, AuthError, AUTH_PARTITION, SESSION_COOKIE_NAME };

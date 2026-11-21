@@ -186,7 +186,9 @@ export class AppUi {
   setBusy(busy) {
     this.busy = busy;
     this.elements.loginButton.disabled = busy || this.authEnabled === false;
-    this.elements.loginButton.textContent = busy ? 'Ожидание входа…' : 'Войти через Discord';
+    this.elements.loginButton.textContent = busy
+      ? 'Ожидание входа в браузере…'
+      : 'Войти через Discord';
   }
 
   /**
