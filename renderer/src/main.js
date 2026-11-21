@@ -436,17 +436,6 @@ async function handleSettingsChange(patch) {
       await restartVoice();
     }
 
-    if (previous.ptt.radioKey !== next.ptt.radioKey || previous.ptt.radioGlobal !== next.ptt.radioGlobal) {
-      const shortcut = await bridge.shortcuts.apply({
-        radioKey: next.ptt.radioKey,
-        radioGlobal: next.ptt.radioGlobal,
-      });
-
-      if (shortcut?.error) {
-        ui.toast(shortcut.error.message, 'error');
-      }
-    }
-
     await refreshDevices();
   } catch (err) {
     reportError(errorMessage(err, 'Не удалось сохранить настройки.'), err);
@@ -757,15 +746,6 @@ async function boot() {
 
   bridge.events.onSettingsChanged((value) => {
     ui.setSettings(value);
-  });
-
-  bridge.events.onShortcutTrigger(() => {
-    if (muted) {
-      ui.toast('Микрофон выключен.', 'error');
-      return;
-    }
-
-    void radio.toggleTransmission();
   });
 
   bridge.events.onNotice((notice) => {

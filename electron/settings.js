@@ -34,7 +34,6 @@ const DEFAULTS = Object.freeze({
   }),
   ptt: Object.freeze({
     radioKey: 'R',
-    radioGlobal: true,
     proximityKey: 'V',
   }),
   connection: Object.freeze({
@@ -127,7 +126,6 @@ function sanitizeSettings(raw) {
     },
     ptt: {
       radioKey: readAccelerator(ptt.radioKey, DEFAULTS.ptt.radioKey),
-      radioGlobal: readBoolean(ptt.radioGlobal, DEFAULTS.ptt.radioGlobal),
       proximityKey: readAccelerator(ptt.proximityKey, DEFAULTS.ptt.proximityKey),
     },
     connection: {

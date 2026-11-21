@@ -246,6 +246,9 @@ export class VoiceClient {
         opusDtx: false,
         opusFec: true,
         opusMaxPlaybackRate: 48_000,
+        // Кадр 10 мс вместо 20 мс: вдвое меньше времени на накопление
+        // одного кадра. Приёмник использует то же значение (`minptime: 10`).
+        opusPtime: 10,
       },
     });
 
@@ -342,6 +345,17 @@ export class VoiceClient {
         kind: message.kind,
         rtpParameters: message.rtpParameters,
         appData: { source: message.source },
+        // Входящий звук должен звучать сразу. По умолчанию браузер держит
+        // джиттер-буфер 200–500 мс, что и создаёт ощущение «эха» и задержки.
+        onRtpReceiver: (receiver) => {
+          if ('jitterBufferTarget' in receiver) {
+            receiver.jitterBufferTarget = 0;
+          }
+
+          if ('playoutDelayHint' in receiver) {
+            receiver.playoutDelayHint = 0;
+          }
+        },
       });
     } catch (err) {
       this.onEvent?.({

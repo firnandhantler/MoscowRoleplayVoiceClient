@@ -138,7 +138,6 @@ export class AppUi {
         document.getElementById('btn-key-proximity'),
         '#btn-key-proximity',
       ),
-      checkRadioGlobal: requireElement(document.getElementById('chk-radio-global'), '#chk-radio-global'),
       resetButton: requireElement(document.getElementById('btn-reset'), '#btn-reset'),
 
       reconnectButton: requireElement(document.getElementById('btn-reconnect'), '#btn-reconnect'),
@@ -453,7 +452,6 @@ export class AppUi {
     this.elements.checkNoise.checked = settings.audio.noiseSuppression;
     this.elements.checkAgc.checked = settings.audio.autoGainControl;
     this.elements.checkDuck.checked = settings.microphone.duckProximityWhileRadio;
-    this.elements.checkRadioGlobal.checked = settings.ptt.radioGlobal;
     this.elements.keyRadio.textContent = formatAccelerator(settings.ptt.radioKey);
     this.elements.keyProximity.textContent = formatAccelerator(settings.ptt.proximityKey);
 
@@ -623,10 +621,6 @@ export class AppUi {
       this.callbacks.onSettingsChange({
         microphone: { duckProximityWhileRadio: this.elements.checkDuck.checked },
       });
-    });
-
-    this.elements.checkRadioGlobal.addEventListener('change', () => {
-      this.callbacks.onSettingsChange({ ptt: { radioGlobal: this.elements.checkRadioGlobal.checked } });
     });
 
     this.elements.keyRadio.addEventListener('click', () => {

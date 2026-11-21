@@ -60,15 +60,10 @@ const api = Object.freeze({
     status: () => ipcRenderer.invoke('signal:status'),
   }),
 
-  shortcuts: Object.freeze({
-    apply: (payload) => ipcRenderer.invoke('shortcuts:apply', payload),
-  }),
-
   events: Object.freeze({
     onAuthChanged: (handler) => subscribe('auth:changed', handler),
     onSignalState: (handler) => subscribe('signal:state', handler),
     onSignalMessage: (handler) => subscribe('signal:message', handler),
-    onShortcutTrigger: (handler) => subscribe('shortcut:trigger', handler),
     onSettingsChanged: (handler) => subscribe('settings:changed', handler),
     onNotice: (handler) => subscribe('app:notice', handler),
   }),

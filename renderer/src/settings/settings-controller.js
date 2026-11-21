@@ -18,7 +18,6 @@ export class SettingsController {
     this.onUpdate = onUpdate;
     this.onError = onError;
     this.value = null;
-    this.lastShortcut = null;
   }
 
   /** Загружает настройки из главного процесса. */
@@ -44,11 +43,6 @@ export class SettingsController {
     const result = await this.bridge.settings.update(patch);
 
     this.value = result.settings;
-    this.lastShortcut = result.shortcut ?? null;
-
-    if (this.lastShortcut?.error) {
-      this.onError?.(this.lastShortcut.error);
-    }
 
     this.onUpdate(this.value);
 
@@ -60,11 +54,6 @@ export class SettingsController {
     const result = await this.bridge.settings.reset();
 
     this.value = result.settings;
-    this.lastShortcut = result.shortcut ?? null;
-
-    if (this.lastShortcut?.error) {
-      this.onError?.(this.lastShortcut.error);
-    }
 
     this.onUpdate(this.value);
 

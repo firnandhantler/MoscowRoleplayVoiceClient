@@ -1,6 +1,6 @@
 {
   "name": "@moscowroleplay/voice-client",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "description": "Windows-клиент MoscowRoleplay Voice на Electron: Discord-вход, proximity voice и радио через mediasoup",
   "author": "MoscowRoleplay",

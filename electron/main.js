@@ -8,8 +8,11 @@
  * - вход через Discord в системном браузере и хранение токена сессии
  *   (renderer токена не получает);
  * - WebSocket-соединение с сервером и автопереподключение;
- * - пользовательские настройки и глобальные клавиши;
+ * - пользовательские настройки;
  * - IPC-интерфейс с жёстким whitelist действий.
+ *
+ * Клиент не перехватывает клавиши других приложений: глобальные горячие клавиши
+ * не регистрируются, поэтому набор текста в игре и чате не ломается.
  *
  * Голос (mediasoup-client, Web Audio) работает в renderer — там есть WebRTC
  * и доступ к микрофону.
@@ -23,7 +26,6 @@ const { loadClientConfig } = require('./config');
 const { AuthManager } = require('./auth');
 const { SettingsStore } = require('./settings');
 const { SignalingClient, SignalingState } = require('./signaling');
-const { ShortcutManager } = require('./shortcuts');
 
 app.enableSandbox();
 app.setName('MoscowRoleplay Voice');
@@ -32,6 +34,13 @@ app.setAppUserModelId('com.moscowroleplay.voice');
 // Голосовой чат должен воспроизводиться без дополнительного клика:
 // входящие потоки приходят в любой момент, в том числе когда окно свёрнуто.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
+// Окно клиента почти всегда свёрнуто или перекрыто игрой. Без этих флагов
+// Chromium замедляет таймеры и обработку в фоновом renderer'е: голос начинает
+// «догонять», а WebSocket-сердцебиение запаздывает.
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 const isDevelopment = !app.isPackaged;
 const rendererEntryPath = path.join(__dirname, '..', 'renderer', 'index.html');
@@ -45,8 +54,6 @@ let auth = null;
 let settings = null;
 /** @type {SignalingClient|null} */
 let signaling = null;
-/** @type {ShortcutManager|null} */
-let shortcuts = null;
 /** @type {ReturnType<typeof loadClientConfig>|null} */
 let clientConfig = null;
 
@@ -131,6 +138,9 @@ function createWindow() {
       allowRunningInsecureContent: false,
       webviewTag: false,
       spellcheck: false,
+      // Окно часто свёрнуто во время игры. Без этого флага Chromium
+      // замедляет таймеры и обработку WebRTC в фоне.
+      backgroundThrottling: false,
       devTools: isDevelopment,
     },
   });
@@ -187,24 +197,6 @@ function configurePermissions() {
 }
 
 /**
- * Применяет глобальную клавишу радиосвязи из настроек.
- *
- * @returns {{registered: boolean, error: {code: string, message: string}|null}}
- */
-function applyShortcuts() {
-  if (settings === null || shortcuts === null) {
-    return { registered: false, error: null };
-  }
-
-  const ptt = settings.get().ptt;
-
-  return shortcuts.apply({
-    accelerator: ptt.radioKey,
-    enabled: ptt.radioGlobal === true,
-  });
-}
-
-/**
  * Регистрирует IPC-обработчики.
  */
 function registerIpc() {
@@ -227,28 +219,18 @@ function registerIpc() {
 
   handleIpc('settings:update', (_event, patch) => {
     const updated = settings.update(patch);
-    const shortcutResult = applyShortcuts();
 
     sendToRenderer('settings:changed', updated);
 
-    return { settings: updated, shortcut: shortcutResult };
+    return { settings: updated };
   });
 
   handleIpc('settings:reset', () => {
     const updated = settings.reset();
-    const shortcutResult = applyShortcuts();
 
     sendToRenderer('settings:changed', updated);
 
-    return { settings: updated, shortcut: shortcutResult };
-  });
-
-  handleIpc('shortcuts:apply', (_event, payload) => {
-    if (settings !== null) {
-      settings.update({ ptt: payload ?? {} });
-    }
-
-    return applyShortcuts();
+    return { settings: updated };
   });
 
   handleIpc('auth:status', () => auth.getStatus());
@@ -336,32 +318,12 @@ async function bootstrap() {
   });
 
   settings = new SettingsStore({ userDataPath: app.getPath('userData') });
-  shortcuts = new ShortcutManager({
-    onTrigger: () => {
-      // Когда окно активно, удержание клавиши обрабатывает renderer
-      // (keydown/keyup). Глобальный переключатель нужен только в фоне,
-      // иначе одно нажатие сработало бы дважды.
-      if (mainWindow !== null && mainWindow.isFocused()) {
-        return;
-      }
-
-      sendToRenderer('shortcut:trigger', {});
-    },
-  });
 
   createServices();
   configurePermissions();
   registerIpc();
 
   createWindow();
-
-  // Глобальная клавиша регистрируется после появления окна: так пользователь
-  // увидит предупреждение, если клавиша занята другим приложением.
-  const shortcutResult = applyShortcuts();
-
-  if (shortcutResult.error) {
-    sendToRenderer('app:notice', shortcutResult.error);
-  }
 
   const status = await auth.restore();
 
@@ -408,7 +370,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   signaling?.dispose();
-  shortcuts?.dispose();
 });
 
 process.on('uncaughtException', (err) => {

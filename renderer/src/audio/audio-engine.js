@@ -20,6 +20,20 @@ const DUCK_LEVEL = 0.35;
 const GAIN_SMOOTHING_SECONDS = 0.02;
 
 /**
+ * Частота среза фильтра, отсекающего инфранизкие шумы микрофона:
+ * гул стола, ветер, рокот вентиляции. На разборчивость речи не влияет.
+ */
+const HIGHPASS_FREQUENCY_HZ = 80;
+
+/**
+ * Значение `contentHint` для микрофонных треков.
+ *
+ * Подсказывает кодеку, что передаётся речь: Opus и WebRTC выбирают более
+ * агрессивное шумоподавление и меньшее буферизование для голоса.
+ */
+const SPEECH_CONTENT_HINT = 'speech';
+
+/**
  * Переводит ошибку getUserMedia в понятный текст.
  *
  * @param {unknown} err
@@ -53,6 +67,8 @@ export class AudioEngine {
     this.stream = null;
     /** @type {MediaStreamAudioSourceNode|null} */
     this.source = null;
+    /** @type {BiquadFilterNode|null} */
+    this.highpass = null;
     this.inputGain = null;
     this.proximityGain = null;
     this.radioGain = null;
@@ -120,7 +136,13 @@ export class AudioEngine {
       throw new Error('Web Audio API недоступен в этой сборке клиента.');
     }
 
-    this.context = new AudioContextClass({ sampleRate: 48_000 });
+    // `latencyHint: 'interactive'` просит браузер минимальный буфер вывода:
+    // это главный рычаг задержки на стороне Web Audio. 48 кГц — родная
+    // частота Opus, поэтому ресемплинг не добавляет лишней обработки.
+    this.context = new AudioContextClass({
+      latencyHint: 'interactive',
+      sampleRate: 48_000,
+    });
 
     if (this.context.state === 'suspended') {
       try {
@@ -131,6 +153,11 @@ export class AudioEngine {
     }
 
     this.source = this.context.createMediaStreamSource(this.stream);
+    this.highpass = this.context.createBiquadFilter();
+
+    this.highpass.type = 'highpass';
+    this.highpass.frequency.value = HIGHPASS_FREQUENCY_HZ;
+    this.highpass.Q.value = 0.7;
 
     this.inputGain = this.context.createGain();
     this.proximityGain = this.context.createGain();
@@ -143,8 +170,9 @@ export class AudioEngine {
     this.analyser.smoothingTimeConstant = 0.4;
     this.analyserBuffer = new Uint8Array(this.analyser.fftSize);
 
-    this.source.connect(this.inputGain);
-    this.source.connect(this.analyser);
+    this.source.connect(this.highpass);
+    this.highpass.connect(this.inputGain);
+    this.highpass.connect(this.analyser);
 
     this.inputGain.connect(this.proximityGain);
     this.proximityGain.connect(this.proximityDestination);
@@ -201,8 +229,7 @@ export class AudioEngine {
 
     this.stream = stream;
     this.source = this.context.createMediaStreamSource(stream);
-    this.source.connect(this.inputGain);
-    this.source.connect(this.analyser);
+    this.source.connect(this.highpass);
 
     try {
       previousSource?.disconnect();
@@ -223,10 +250,16 @@ export class AudioEngine {
       throw new Error('Микрофон не запущен.');
     }
 
-    return {
-      proximity: this.proximityDestination.stream.getAudioTracks()[0],
-      radio: this.radioDestination.stream.getAudioTracks()[0],
-    };
+    const proximity = this.proximityDestination.stream.getAudioTracks()[0];
+    const radio = this.radioDestination.stream.getAudioTracks()[0];
+
+    for (const track of [proximity, radio]) {
+      if (track && 'contentHint' in track) {
+        track.contentHint = SPEECH_CONTENT_HINT;
+      }
+    }
+
+    return { proximity, radio };
   }
 
   /**
@@ -416,6 +449,7 @@ export class AudioEngine {
     this.detachAllConsumers();
 
     this.source?.disconnect();
+    this.highpass?.disconnect();
     this.inputGain?.disconnect();
     this.proximityGain?.disconnect();
     this.radioGain?.disconnect();
@@ -438,6 +472,7 @@ export class AudioEngine {
     this.context = null;
     this.stream = null;
     this.source = null;
+    this.highpass = null;
     this.inputGain = null;
     this.proximityGain = null;
     this.radioGain = null;
